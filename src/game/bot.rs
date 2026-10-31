@@ -140,49 +140,65 @@ impl BotInstance {
             })).await;
         }
 
-        let mut pos_timer = tokio::time::interval(Duration::from_millis(500));
-        let mut route_timer = tokio::time::interval(Duration::from_secs(30));
-        let mut save_timer = tokio::time::interval(Duration::from_secs(15));
-        let mut daily_timer = tokio::time::interval(Duration::from_secs(300));
+        let bot_walk = self.clone();
+        let walk_task = tokio::spawn(async move {
+            while bot_walk.running.load(Ordering::Relaxed) {
+                let jitter = 0.85 + rand::random::<f64>() * 0.3;
+                tokio::time::sleep(Duration::from_secs_f64(0.5 * jitter)).await;
+                if bot_walk.config.settings.arena_walk && bot_walk.socket.is_connected().await {
+                    let elapsed = bot_walk.start_time.elapsed().as_secs_f64();
+                    let base_x = if bot_walk.config.settings.arena_x != 0.0 { bot_walk.config.settings.arena_x } else { ARENA_BASE_X };
+                    let base_y = if bot_walk.config.settings.arena_y != 0.0 { bot_walk.config.settings.arena_y } else { ARENA_BASE_Y };
+                    let (x, y) = calculate_patrol_pos(base_x, base_y, elapsed, &bot_walk.config.name);
 
-        while self.running.load(Ordering::Relaxed) {
-            tokio::select! {
-                _ = pos_timer.tick() => {
-                    if self.config.settings.arena_walk && self.socket.is_connected().await {
-                        let elapsed = self.start_time.elapsed().as_secs_f64();
-                        let base_x = if self.config.settings.arena_x != 0.0 { self.config.settings.arena_x } else { ARENA_BASE_X };
-                        let base_y = if self.config.settings.arena_y != 0.0 { self.config.settings.arena_y } else { ARENA_BASE_Y };
-                        let (x, y) = calculate_patrol_pos(base_x, base_y, elapsed, &self.config.name);
-
-                        let _ = self.socket.send_json(&serde_json::json!({
-                            "t": "pos",
-                            "tj": elapsed,
-                            "x": x,
-                            "y": y,
-                            "dx": 1,
-                            "dy": 0,
-                            "anda": true,
-                            "atk": true,
-                            "vida": 1000.0,
-                            "skin": 0,
-                            "pvp": false,
-                            "parado": false,
-                            "morto": false,
-                            "mt": ""
-                        })).await;
-                    }
-                }
-                _ = route_timer.tick() => {
-                    self.check_optimal_route().await;
-                }
-                _ = save_timer.tick() => {
-                    let sess = self.session.lock().await;
-                    let _ = self.api.save_state(&sess.estado).await;
-                }
-                _ = daily_timer.tick() => {
-                    let _ = self.api.claim_daily().await;
+                    let _ = bot_walk.socket.send_json(&serde_json::json!({
+                        "t": "pos",
+                        "tj": elapsed,
+                        "x": x,
+                        "y": y,
+                        "dx": 1,
+                        "dy": 0,
+                        "anda": true,
+                        "atk": true,
+                        "vida": 1000.0,
+                        "skin": 0,
+                        "pvp": false,
+                        "parado": false,
+                        "morto": false,
+                        "mt": ""
+                    })).await;
                 }
             }
-        }
+        });
+
+        let bot_route = self.clone();
+        let route_task = tokio::spawn(async move {
+            while bot_route.running.load(Ordering::Relaxed) {
+                let jitter = 0.8 + rand::random::<f64>() * 0.4;
+                tokio::time::sleep(Duration::from_secs_f64(30.0 * jitter)).await;
+                bot_route.check_optimal_route().await;
+            }
+        });
+
+        let bot_save = self.clone();
+        let save_task = tokio::spawn(async move {
+            while bot_save.running.load(Ordering::Relaxed) {
+                let jitter = 0.8 + rand::random::<f64>() * 0.4;
+                tokio::time::sleep(Duration::from_secs_f64(15.0 * jitter)).await;
+                let sess = bot_save.session.lock().await;
+                let _ = bot_save.api.save_state(&sess.estado).await;
+            }
+        });
+
+        let bot_daily = self.clone();
+        let daily_task = tokio::spawn(async move {
+            while bot_daily.running.load(Ordering::Relaxed) {
+                let jitter = 0.85 + rand::random::<f64>() * 0.3;
+                tokio::time::sleep(Duration::from_secs_f64(300.0 * jitter)).await;
+                let _ = bot_daily.api.claim_daily().await;
+            }
+        });
+
+        let _ = tokio::join!(walk_task, route_task, save_task, daily_task);
     }
 }
